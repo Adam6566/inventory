@@ -1,0 +1,560 @@
+let inventory = [];
+let filteredInventory = [];
+let showLowOnly = false;
+let scanner = null;
+
+const STORAGE_KEYS = ['water_department_inventory_v2', 'water_department_inventory_v1', 'municipal_inventory_v8'];
+const PRIMARY_STORAGE_KEY = STORAGE_KEYS[0];
+const FALLBACK_IMAGE = 'assets/fallback.png';
+const FALLBACK_INVENTORY = [
+  { id: 100000, sku: 'EJ-GEN-783-53', name: 'Valve Box Lid', category: 'Water Distribution', size: '1/2 in', vendor: 'EJ', qty: 156, min: 10, image: FALLBACK_IMAGE },
+  { id: 100001, sku: 'FORD-FTSS-542', name: 'Valve Box', category: 'Water Distribution', size: '5/8 in', vendor: 'Ford Meter Box', qty: 146, min: 10, image: FALLBACK_IMAGE },
+  { id: 100013, sku: 'MUELLER-GEN-817-955', name: 'Curb Stop', category: 'Water Distribution', size: '1 in', vendor: 'Mueller', qty: 2, min: 20, image: FALLBACK_IMAGE },
+  { id: 100015, sku: 'SIGMA-GEN-984-675', name: 'Uni-Flange Adapter', category: 'Water Distribution', size: '1-1/4 in', vendor: 'SIGMA', qty: 5, min: 15, image: FALLBACK_IMAGE },
+  { id: 100018, sku: 'FORD-FTS-956', name: 'Curb Stop', category: 'Water Distribution', size: '4 in', vendor: 'Ford Meter Box', qty: 1, min: 15, image: FALLBACK_IMAGE },
+  { id: 100077, sku: 'INTERNAL-GEN-429-117', name: 'Pipe Restraint', category: 'Water Distribution', size: '12 in', vendor: 'Internal Stock', qty: 3, min: 20, image: FALLBACK_IMAGE }
+];
+const sewerCategories = new Set(['Sewer', 'Repair Clamps']);
+
+const els = {
+  inventoryBody: document.getElementById('inventoryBody'),
+  reorderTableBody: document.getElementById('reorderTableBody'),
+  reorderSummary: document.getElementById('reorderSummary'),
+  totalItems: document.getElementById('totalItems'),
+  lowStock: document.getElementById('lowStock'),
+  searchInput: document.getElementById('searchInput'),
+  departmentFilter: document.getElementById('departmentFilter'),
+  categoryFilter: document.getElementById('categoryFilter'),
+  showLowBtn: document.getElementById('showLowBtn'),
+  resetFiltersBtn: document.getElementById('resetFiltersBtn'),
+  addItemBtn: document.getElementById('addItemBtn'),
+  exportCsvBtn: document.getElementById('exportCsvBtn'),
+  exportReorderBtn: document.getElementById('exportReorderBtn'),
+  generateBarcodeBtn: document.getElementById('generateBarcodeBtn'),
+  downloadBarcodeBtn: document.getElementById('downloadBarcodeBtn'),
+  barcodeText: document.getElementById('barcodeText'),
+  customBarcode: document.getElementById('customBarcode'),
+  startScannerBtn: document.getElementById('startScannerBtn'),
+  stopScannerBtn: document.getElementById('stopScannerBtn'),
+  openTakePanelBtn: document.getElementById('openTakePanelBtn'),
+  openReceivePanelBtn: document.getElementById('openReceivePanelBtn'),
+  takePanel: document.getElementById('takePanel'),
+  receivePanel: document.getElementById('receivePanel'),
+  takeSearchInput: document.getElementById('takeSearchInput'),
+  receiveSearchInput: document.getElementById('receiveSearchInput'),
+  takeItemSelect: document.getElementById('takeItemSelect'),
+  receiveItemSelect: document.getElementById('receiveItemSelect'),
+  takeQtyInput: document.getElementById('takeQtyInput'),
+  receiveQtyInput: document.getElementById('receiveQtyInput'),
+  confirmTakeBtn: document.getElementById('confirmTakeBtn'),
+  confirmReceiveBtn: document.getElementById('confirmReceiveBtn')
+};
+
+function normalizeItem(item = {}) {
+  return {
+    id: Number(item.id) || Date.now(),
+    sku: String(item.sku || `CUSTOM-${Date.now()}`),
+    name: String(item.name || 'Unnamed Item'),
+    category: String(item.category || 'Uncategorized'),
+    size: String(item.size || '-'),
+    vendor: String(item.vendor || 'Custom'),
+    qty: Number(item.qty) || 0,
+    min: Number(item.min) || 0,
+    image: String(item.image || FALLBACK_IMAGE)
+  };
+}
+
+function saveLocal() {
+  try {
+    localStorage.setItem(PRIMARY_STORAGE_KEY, JSON.stringify(inventory));
+  } catch (err) {
+    console.warn('Could not save inventory locally.', err);
+  }
+}
+
+function loadLocal() {
+  for (const key of STORAGE_KEYS) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length) {
+        return parsed.map(normalizeItem);
+      }
+    } catch (err) {
+      console.warn(`Could not read local inventory from ${key}.`, err);
+    }
+  }
+  return null;
+}
+
+function getDepartment(item) {
+  return sewerCategories.has(item.category) ? 'Sewer' : 'Water';
+}
+
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let value = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const next = text[i + 1];
+
+    if (char === '"') {
+      if (inQuotes && next === '"') {
+        value += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      row.push(value);
+      value = '';
+    } else if ((char === '\n' || char === '\r') && !inQuotes) {
+      if (char === '\r' && next === '\n') i += 1;
+      row.push(value);
+      value = '';
+      if (row.some(cell => cell !== '')) rows.push(row);
+      row = [];
+    } else {
+      value += char;
+    }
+  }
+
+  if (value.length || row.length) {
+    row.push(value);
+    if (row.some(cell => cell !== '')) rows.push(row);
+  }
+
+  if (!rows.length) return [];
+  const headers = rows.shift();
+  return rows.map(cols => {
+    const obj = {};
+    headers.forEach((header, index) => {
+      obj[header] = cols[index] ?? '';
+    });
+    return normalizeItem(obj);
+  });
+}
+
+async function loadInitialData() {
+  const local = loadLocal();
+  if (local && local.length) {
+    inventory = local;
+    init();
+    return;
+  }
+
+  const response = await fetch('inventory.csv', { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Could not load inventory.csv (${response.status})`);
+  }
+
+  const text = await response.text();
+  const parsed = parseCsv(text);
+  inventory = parsed.length ? parsed : FALLBACK_INVENTORY.map(normalizeItem);
+  saveLocal();
+  init();
+}
+
+function init() {
+  populateFilters();
+  bindEvents();
+  applyFilters();
+  populatePanelSelect('take');
+  populatePanelSelect('receive');
+  renderCustomBarcode('CUSTOM-1001');
+}
+
+function populateFilters() {
+  const categories = [...new Set(inventory.map(item => item.category))].sort();
+  els.categoryFilter.innerHTML = '<option value="">All Categories</option>';
+  categories.forEach(category => {
+    const option = document.createElement('option');
+    option.value = category;
+    option.textContent = category;
+    els.categoryFilter.appendChild(option);
+  });
+}
+
+function bindEvents() {
+  els.searchInput.addEventListener('input', applyFilters);
+  els.departmentFilter.addEventListener('change', applyFilters);
+  els.categoryFilter.addEventListener('change', applyFilters);
+  els.showLowBtn.addEventListener('click', () => {
+    showLowOnly = !showLowOnly;
+    els.showLowBtn.textContent = showLowOnly ? 'Showing Low Stock' : 'Low Stock Only';
+    applyFilters();
+  });
+  els.resetFiltersBtn.addEventListener('click', () => {
+    els.searchInput.value = '';
+    els.departmentFilter.value = '';
+    els.categoryFilter.value = '';
+    showLowOnly = false;
+    els.showLowBtn.textContent = 'Low Stock Only';
+    applyFilters();
+  });
+  els.addItemBtn.addEventListener('click', addItem);
+  els.exportCsvBtn.addEventListener('click', exportCsv);
+  els.exportReorderBtn.addEventListener('click', exportReorderCsv);
+  els.generateBarcodeBtn.addEventListener('click', () => renderCustomBarcode(els.barcodeText.value || 'CUSTOM-1001'));
+  els.downloadBarcodeBtn.addEventListener('click', downloadBarcodePng);
+  els.startScannerBtn.addEventListener('click', startScanner);
+  els.stopScannerBtn.addEventListener('click', stopScanner);
+  els.openTakePanelBtn.addEventListener('click', () => openPanel('take'));
+  els.openReceivePanelBtn.addEventListener('click', () => openPanel('receive'));
+  els.takeSearchInput.addEventListener('input', () => populatePanelSelect('take'));
+  els.receiveSearchInput.addEventListener('input', () => populatePanelSelect('receive'));
+  els.confirmTakeBtn.addEventListener('click', () => panelAdjust('take'));
+  els.confirmReceiveBtn.addEventListener('click', () => panelAdjust('receive'));
+  document.querySelectorAll('[data-close]').forEach(btn => {
+    btn.addEventListener('click', event => closePanel(event.target.getAttribute('data-close')));
+  });
+}
+
+function openPanel(type) {
+  if (type === 'take') {
+    els.takePanel.classList.add('open');
+    els.takeSearchInput.focus();
+    populatePanelSelect('take');
+  } else {
+    els.receivePanel.classList.add('open');
+    els.receiveSearchInput.focus();
+    populatePanelSelect('receive');
+  }
+}
+
+function closePanel(id) {
+  document.getElementById(id).classList.remove('open');
+}
+
+function populatePanelSelect(type) {
+  const searchEl = type === 'take' ? els.takeSearchInput : els.receiveSearchInput;
+  const selectEl = type === 'take' ? els.takeItemSelect : els.receiveItemSelect;
+  const query = searchEl.value.trim().toLowerCase();
+  const options = (query
+    ? inventory.filter(item => [item.id, item.sku, item.name].join(' ').toLowerCase().includes(query))
+    : inventory.slice(0, 200)
+  ).slice(0, 200);
+
+  selectEl.innerHTML = '';
+  options.forEach(item => {
+    const option = document.createElement('option');
+    option.value = String(item.id);
+    option.textContent = `${item.name} — ${item.sku} — Qty ${item.qty}`;
+    selectEl.appendChild(option);
+  });
+}
+
+function panelAdjust(type) {
+  const id = Number(type === 'take' ? els.takeItemSelect.value : els.receiveItemSelect.value);
+  const amount = Number(type === 'take' ? els.takeQtyInput.value : els.receiveQtyInput.value);
+  if (!id || amount <= 0) {
+    alert('Pick an item and enter a quantity.');
+    return;
+  }
+  if (type === 'take') takeInventory(id, amount);
+  else receiveInventory(id, amount);
+  populatePanelSelect(type);
+}
+
+function applyFilters() {
+  const query = els.searchInput.value.trim().toLowerCase();
+  const department = els.departmentFilter.value;
+  const category = els.categoryFilter.value;
+
+  filteredInventory = inventory.filter(item => {
+    const matchesSearch = !query || [item.id, item.sku, item.name, item.category, item.size, item.vendor].join(' ').toLowerCase().includes(query);
+    const matchesDepartment = !department || getDepartment(item) === department;
+    const matchesCategory = !category || item.category === category;
+    const matchesLow = !showLowOnly || Number(item.qty) <= Number(item.min);
+    return matchesSearch && matchesDepartment && matchesCategory && matchesLow;
+  });
+
+  renderInventory();
+  renderDashboard();
+  renderReorderList();
+  populatePanelSelect('take');
+  populatePanelSelect('receive');
+}
+
+function renderDashboard() {
+  els.totalItems.textContent = inventory.length.toLocaleString();
+  els.lowStock.textContent = inventory.filter(item => Number(item.qty) <= Number(item.min)).length.toLocaleString();
+}
+
+function makeThumb(item) {
+  const img = document.createElement('img');
+  img.src = item.image || FALLBACK_IMAGE;
+  img.alt = item.name;
+  img.className = 'thumb';
+  img.onerror = () => {
+    if (!img.src.endsWith(FALLBACK_IMAGE)) img.src = FALLBACK_IMAGE;
+  };
+  return img;
+}
+
+function renderInventory() {
+  els.inventoryBody.innerHTML = '';
+  const template = document.getElementById('rowTemplate');
+
+  filteredInventory.forEach(item => {
+    const frag = template.content.cloneNode(true);
+    const tr = frag.querySelector('tr');
+    if (Number(item.qty) <= Number(item.min)) tr.classList.add('low-row');
+
+    frag.querySelector('.image-cell').appendChild(makeThumb(item));
+    frag.querySelector('.id').textContent = item.id;
+    frag.querySelector('.sku').textContent = item.sku;
+    frag.querySelector('.name').textContent = item.name;
+    frag.querySelector('.category').textContent = item.category;
+    frag.querySelector('.size').textContent = item.size;
+    frag.querySelector('.vendor').textContent = item.vendor;
+    frag.querySelector('.qty').textContent = item.qty;
+    frag.querySelector('.min').textContent = item.min;
+
+    const barcodeWrap = document.createElement('div');
+    barcodeWrap.className = 'barcode-svg';
+    const barcodeSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    barcodeWrap.appendChild(barcodeSvg);
+    frag.querySelector('.barcode-cell').appendChild(barcodeWrap);
+
+    try {
+      if (window.JsBarcode) {
+        JsBarcode(barcodeSvg, String(item.id), { format: 'CODE128', width: 1.3, height: 36, displayValue: false, margin: 0 });
+      }
+    } catch (err) {
+      console.warn('Could not render row barcode.', err);
+    }
+
+    frag.querySelector('.take-btn').addEventListener('click', () => takeInventory(item.id));
+    frag.querySelector('.receive-btn').addEventListener('click', () => receiveInventory(item.id));
+    els.inventoryBody.appendChild(frag);
+  });
+}
+
+function addItem() {
+  const name = document.getElementById('nameInput').value.trim();
+  const sku = document.getElementById('skuInput').value.trim() || `CUSTOM-${Date.now()}`;
+  const category = document.getElementById('categoryInput').value.trim() || 'Uncategorized';
+  const size = document.getElementById('sizeInput').value.trim() || '-';
+  const vendor = document.getElementById('vendorInput').value.trim() || 'Custom';
+  const qty = Number(document.getElementById('qtyInput').value || 0);
+  const min = Number(document.getElementById('minInput').value || 0);
+
+  if (!name) {
+    alert('Enter an item name.');
+    return;
+  }
+
+  inventory.unshift(normalizeItem({ id: Date.now(), sku, name, category, size, vendor, qty, min, image: FALLBACK_IMAGE }));
+  saveLocal();
+  populateFilters();
+  applyFilters();
+
+  ['nameInput', 'skuInput', 'categoryInput', 'sizeInput', 'vendorInput', 'qtyInput', 'minInput'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+}
+
+function takeInventory(id, presetAmount = null) {
+  const item = inventory.find(entry => entry.id === id);
+  if (!item) return;
+  const amount = presetAmount ?? Number(prompt(`How many ${item.name} are you taking?`, '1'));
+  if (!amount || Number.isNaN(amount) || amount <= 0) return;
+  item.qty = Math.max(0, Number(item.qty) - amount);
+  saveLocal();
+  applyFilters();
+}
+
+function receiveInventory(id, presetAmount = null) {
+  const item = inventory.find(entry => entry.id === id);
+  if (!item) return;
+  const amount = presetAmount ?? Number(prompt(`How many ${item.name} are you receiving?`, '1'));
+  if (!amount || Number.isNaN(amount) || amount <= 0) return;
+  item.qty = Number(item.qty) + amount;
+  saveLocal();
+  applyFilters();
+}
+
+function renderReorderList() {
+  const lowItems = inventory
+    .filter(item => Number(item.qty) <= Number(item.min))
+    .sort((a, b) => Number(a.qty) - Number(b.qty));
+
+  els.reorderTableBody.innerHTML = '';
+
+  if (!lowItems.length) {
+    els.reorderSummary.textContent = 'No low-stock items right now.';
+    return;
+  }
+
+  els.reorderSummary.textContent = `${lowItems.length} item(s) are at or below minimum stock.`;
+
+  lowItems.slice(0, 200).forEach(item => {
+    const suggested = Math.max(Number(item.min) * 2 - Number(item.qty), 1);
+    const tr = document.createElement('tr');
+
+    const cells = [document.createElement('td'), document.createElement('td'), document.createElement('td'), document.createElement('td'), document.createElement('td'), document.createElement('td')];
+    cells[0].appendChild(makeThumb(item));
+    cells[1].textContent = item.sku;
+    cells[2].textContent = item.name;
+    cells[3].textContent = item.qty;
+    cells[4].textContent = item.min;
+    cells[5].textContent = suggested;
+    cells.forEach(cell => tr.appendChild(cell));
+    els.reorderTableBody.appendChild(tr);
+  });
+}
+
+function csvEscape(value) {
+  const text = String(value ?? '');
+  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function downloadFile(name, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportCsv() {
+  const headers = ['id', 'sku', 'name', 'category', 'size', 'vendor', 'qty', 'min', 'image'];
+  const csv = [headers.join(',')]
+    .concat(inventory.map(item => headers.map(header => csvEscape(item[header])).join(',')))
+    .join('\n');
+  downloadFile('water_department_inventory_export.csv', csv, 'text/csv;charset=utf-8;');
+}
+
+function exportReorderCsv() {
+  const headers = ['sku', 'name', 'qty', 'min', 'suggested_reorder'];
+  const lowItems = inventory.filter(item => Number(item.qty) <= Number(item.min));
+  const csv = [headers.join(',')]
+    .concat(lowItems.map(item => {
+      const suggested = Math.max(Number(item.min) * 2 - Number(item.qty), 1);
+      return [item.sku, item.name, item.qty, item.min, suggested].map(csvEscape).join(',');
+    }))
+    .join('\n');
+  downloadFile('reorder_list.csv', csv, 'text/csv;charset=utf-8;');
+}
+
+function renderCustomBarcode(text) {
+  try {
+    if (!window.JsBarcode) throw new Error('JsBarcode is unavailable');
+    JsBarcode(els.customBarcode, text, { format: 'CODE128', width: 2, height: 80, displayValue: true });
+  } catch (err) {
+    alert('Invalid barcode text or barcode library unavailable.');
+  }
+}
+
+function downloadBarcodePng() {
+  const svg = els.customBarcode;
+  if (!svg || !svg.outerHTML) return;
+  const svgData = new Blob([svg.outerHTML], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(svgData);
+  const img = new Image();
+
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width || 600;
+    canvas.height = img.height || 200;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+    canvas.toBlob(blob => {
+      if (!blob) return;
+      const pngUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = pngUrl;
+      a.download = 'custom_barcode.png';
+      a.click();
+      URL.revokeObjectURL(pngUrl);
+    });
+  };
+
+  img.src = url;
+}
+
+async function startScanner() {
+  if (scanner) return;
+  if (!window.Html5Qrcode) {
+    alert('Barcode scanner library is unavailable.');
+    return;
+  }
+
+  scanner = new Html5Qrcode('reader');
+
+  try {
+    await scanner.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 220, height: 120 } },
+      decodedText => {
+        els.searchInput.value = decodedText;
+        els.takeSearchInput.value = decodedText;
+        els.receiveSearchInput.value = decodedText;
+        applyFilters();
+        populatePanelSelect('take');
+        populatePanelSelect('receive');
+      }
+    );
+  } catch (err) {
+    alert('Camera scanner could not start on this device or browser.');
+    scanner = null;
+  }
+}
+
+async function stopScanner() {
+  if (!scanner) return;
+  try {
+    await scanner.stop();
+    await scanner.clear();
+  } catch (err) {
+    console.warn('Could not stop scanner cleanly.', err);
+  }
+  scanner = null;
+}
+
+async function clearOldCachesAndWorkers() {
+  try {
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map(registration => registration.unregister()));
+    }
+  } catch (err) {
+    console.warn('Could not unregister old service workers.', err);
+  }
+
+  try {
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys
+          .filter(key => key.includes('inventory') || key.includes('municipal') || key.includes('water-department'))
+          .map(key => caches.delete(key))
+      );
+    }
+  } catch (err) {
+    console.warn('Could not clear old caches.', err);
+  }
+}
+
+async function bootstrap() {
+  await clearOldCachesAndWorkers();
+  try {
+    await loadInitialData();
+  } catch (err) {
+    console.error('App startup failed.', err);
+    inventory = FALLBACK_INVENTORY.map(normalizeItem);
+    init();
+  }
+}
+
+bootstrap();

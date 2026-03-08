@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Water Department Inventory</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#0b5394" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Water Department Inventory</h1>
+      <p>Fast field version</p>
+      <p class="helper">Questions call Adam</p>
+    </div>
+    <div class="top-actions">
+      <button id="exportCsvBtn">Export CSV</button>
+      <button id="exportReorderBtn">Export Reorder</button>
+    </div>
+  </header>
+
+  <section class="dashboard">
+    <div class="card"><span>Total Items</span><strong id="totalItems">0</strong></div>
+    <div class="card warning"><span>Low Stock</span><strong id="lowStock">0</strong></div>
+    <button class="big-action take" id="openTakePanelBtn">TAKE INVENTORY</button>
+    <button class="big-action receive" id="openReceivePanelBtn">RECEIVE INVENTORY</button>
+  </section>
+
+  <section class="panel filters">
+    <input id="searchInput" type="text" placeholder="Search item or SKU..." />
+    <select id="departmentFilter">
+      <option value="">All Departments</option>
+      <option value="Water">Water</option>
+      <option value="Sewer">Sewer</option>
+    </select>
+    <select id="categoryFilter"><option value="">All Categories</option></select>
+    <button id="showLowBtn">Low Stock Only</button>
+    <button id="resetFiltersBtn">Reset</button>
+  </section>
+
+  <section class="grid-two">
+    <section class="panel">
+      <h2>Barcode Scanner</h2>
+      <div class="scanner-actions">
+        <button id="startScannerBtn">Start Scanner</button>
+        <button id="stopScannerBtn">Stop Scanner</button>
+      </div>
+      <div id="reader"></div>
+      <p class="helper">Scan to fill search and panel item search.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Custom Barcode Generator</h2>
+      <div class="barcode-tools">
+        <input id="barcodeText" placeholder="Enter custom code" />
+        <button id="generateBarcodeBtn">Generate</button>
+        <button id="downloadBarcodeBtn">Download PNG</button>
+      </div>
+      <svg id="customBarcode"></svg>
+    </section>
+  </section>
+
+  <section class="panel form-panel">
+    <h2>Add Item</h2>
+    <div class="form-grid">
+      <input id="nameInput" placeholder="Item name" />
+      <input id="skuInput" placeholder="SKU / Part Number" />
+      <input id="categoryInput" placeholder="Category" />
+      <input id="sizeInput" placeholder="Size" />
+      <input id="vendorInput" placeholder="Vendor" />
+      <input id="qtyInput" type="number" min="0" placeholder="Quantity" />
+      <input id="minInput" type="number" min="0" placeholder="Minimum Qty" />
+      <button id="addItemBtn">Add Item</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Reorder List</h2>
+    <div id="reorderSummary" class="helper"></div>
+    <div class="table-wrap small-table">
+      <table>
+        <thead>
+          <tr><th>Picture</th><th>SKU</th><th>Item</th><th>Qty</th><th>Min</th><th>Suggested</th></tr>
+        </thead>
+        <tbody id="reorderTableBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Inventory</h2>
+    <div class="table-wrap">
+      <table id="inventoryTable">
+        <thead>
+          <tr>
+            <th>Picture</th><th>ID</th><th>SKU</th><th>Name</th><th>Category</th><th>Size</th><th>Vendor</th><th>Qty</th><th>Min</th><th>Barcode</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="inventoryBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="overlay" id="takePanel">
+    <div class="fullscreen-panel">
+      <div class="panel-head">
+        <h2>Take Inventory</h2>
+        <button class="close-btn" data-close="takePanel">Close</button>
+      </div>
+      <div class="panel-grid">
+        <input id="takeSearchInput" placeholder="Search item or scan barcode" />
+        <select id="takeItemSelect"></select>
+        <input id="takeQtyInput" type="number" min="1" value="1" placeholder="Qty" />
+        <button class="big-action take small" id="confirmTakeBtn">CONFIRM TAKE</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="receivePanel">
+    <div class="fullscreen-panel">
+      <div class="panel-head">
+        <h2>Receive Inventory</h2>
+        <button class="close-btn" data-close="receivePanel">Close</button>
+      </div>
+      <div class="panel-grid">
+        <input id="receiveSearchInput" placeholder="Search item or scan barcode" />
+        <select id="receiveItemSelect"></select>
+        <input id="receiveQtyInput" type="number" min="1" value="1" placeholder="Qty" />
+        <button class="big-action receive small" id="confirmReceiveBtn">CONFIRM RECEIVE</button>
+      </div>
+    </div>
+  </div>
+
+  <template id="rowTemplate">
+    <tr>
+      <td class="image-cell"></td>
+      <td class="id"></td>
+      <td class="sku"></td>
+      <td class="name"></td>
+      <td class="category"></td>
+      <td class="size"></td>
+      <td class="vendor"></td>
+      <td class="qty"></td>
+      <td class="min"></td>
+      <td class="barcode-cell"></td>
+      <td class="actions">
+        <button class="take-btn">Take</button>
+        <button class="receive-btn">Receive</button>
+      </td>
+    </tr>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
