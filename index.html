@@ -3,53 +3,49 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inventory</title>
+    <title>Water Department Inventory</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="script.js" defer></script>
 </head>
 <body>
-    <h1>Welcome to the Inventory</h1>
-    <p>This page allows for the management of inventory items.</p>
-    <script>
-        // CSV parsing
-        function parseCSV(data) {
-            return data.split(/\\r?\\n/);
-        }
-
-        // Image fallback
-        function setImageFallback(imgElement, src) {
-            imgElement.onerror = function() {
-                this.src = encodeURIComponent(src);
-            };
-        }
-
-        // Reset filters
-        function resetFilters() {
-            document.getElementById('filter-input').value = '';
-            // Add any additional filter reset logic here
-        }
-
-        // Download file
-        function downloadFile(filename, data) {
-            const blob = new Blob([data], { type: 'text/csv' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        }
-
-        // Download barcode PNG
-        function downloadBarcodePng(barcodeData) {
-            const blob = new Blob([barcodeData], { type: 'image/png' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'barcode.png';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        }
-    </script>
+    <h1>Water Department Inventory</h1>
+    <div id="app">
+        <!-- App Content -->
+    </div>
 </body>
 </html>
+
+<script>
+    function parseCSV(data) {
+        return data.split(/\r?\n/);
+    }
+
+    function handleImageFallback(image) {
+        const imgSrc = encodeURIComponent(image.src);
+        image.onerror = () => {
+            image.src = 'fallback.png';
+        };
+    }
+
+    function resetFilters() {
+        // Implement reset filters logic here
+    }
+
+    function downloadFile(filename, content) {
+        const blob = new Blob([content], { type: 'text/plain' });
+        const link = document.createElement('a');
+        link.href = window.URL.createObjectURL(blob);
+        link.download = filename;
+        link.click();
+        window.URL.revokeObjectURL(link.href);
+    }
+
+    function downloadBarcodePNG(canvasId) {
+        const canvas = document.getElementById(canvasId);
+        const png = canvas.toDataURL("image/png");
+        const link = document.createElement('a');
+        link.href = png;
+        link.download = 'barcode.png';
+        link.click();
+    }
+</script>
